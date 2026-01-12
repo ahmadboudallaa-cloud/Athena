@@ -1,126 +1,155 @@
 <?php
 session_start();
-require_once __DIR__ . '/../core/db.php';
+require_once __DIR__ . '/../core/Database.php';
 
-if(!isset($_SESSION['user'])){
+if (!isset($_SESSION['user'])) {
     header("Location: login.php");
     exit;
 }
 
 $user = $_SESSION['user'];
 
-// Vérifier que project_id est défini
-if(!isset($_GET['project_id'])){
-    die("Projet non défini");
-}
-$project_id = (int)$_GET['project_id'];
+$db = Database::getInstance()->getConnection();
 
-// Récupérer le projet
-$stmt = $db->prepare("SELECT * FROM projects WHERE id=?");
-$stmt->execute([$project_id]);
-$project = $stmt->fetch(PDO::FETCH_ASSOC);
-if(!$project){
-    die("Projet introuvable");
-}
+$projects = $db->query("SELECT * FROM projects ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
 
-// Ajouter un sprint
-if(isset($_POST['create_sprint'])){
-    $title = $_POST['title'];
-    $start_date = $_POST['start_date'];
-    $end_date = $_POST['end_date'];
-
-    $stmt = $db->prepare("INSERT INTO sprints (project_id, title, start_date, end_date) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$project_id, $title, $start_date, $end_date]);
-    header("Location: sprints.php?project_id=".$project_id);
+if (empty($projects)) {
+    echo "Aucun projet trouvé. <a href='projects.php'>Créer un projet</a>";
     exit;
 }
 
-// Supprimer un sprint
-if(isset($_GET['delete'])){
-    $id = (int)$_GET['delete'];
+if (isset($_GET['project_id'])) {
+    $project_id = (int)$_GET['project_id'];
+} else {
+    $project_id = $projects[0]['id'];
+}
+
+if (isset($_POST['create_sprint'])) {
+    $name       = $_POST['name'];
+    $start_date = $_POST['start_date'];
+    $end_date   = $_POST['end_date'];
+
+    $stmt = $db->prepare("INSERT INTO sprints (name, start_date, end_date, project_id) VALUES (?,?,?,?)");
+    $stmt->execute([$name, $start_date, $end_date, $project_id]);
+
+    header("Location: sprints.php?project_id=$project_id");
+    exit;
+}
+
+if (isset($_POST['update_sprint'])) {
+    $sprint_id  = (int)$_POST['sprint_id'];
+    $name       = $_POST['name'];
+    $start_date = $_POST['start_date'];
+    $end_date   = $_POST['end_date'];
+
+    $stmt = $db->prepare("UPDATE sprints SET name=?, start_date=?, end_date=? WHERE id=?");
+    $stmt->execute([$name, $start_date, $end_date, $sprint_id]);
+
+    header("Location: sprints.php?project_id=$project_id");
+    exit;
+}
+
+if (isset($_GET['delete_sprint'])) {
+    $id = (int)$_GET['delete_sprint'];
     $stmt = $db->prepare("DELETE FROM sprints WHERE id=?");
     $stmt->execute([$id]);
-    header("Location: sprints.php?project_id=".$project_id);
+    header("Location: sprints.php?project_id=$project_id");
     exit;
 }
 
-// Récupérer les sprints du projet
-$stmt = $db->prepare("SELECT * FROM sprints WHERE project_id=? ORDER BY start_date DESC");
+$stmt = $db->prepare("SELECT * FROM sprints WHERE project_id=? ORDER BY id ASC");
 $stmt->execute([$project_id]);
 $sprints = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$edit_sprint = null;
+if (isset($_GET['edit_sprint'])) {
+    $edit_id = (int)$_GET['edit_sprint'];
+    $stmt = $db->prepare("SELECT * FROM sprints WHERE id=?");
+    $stmt->execute([$edit_id]);
+    $edit_sprint = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+$current_project = null;
+foreach($projects as $p){
+    if($p['id'] == $project_id){
+        $current_project = $p;
+        break;
+    }
+}
 ?>
 
 <!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Sprints - <?= htmlspecialchars($project['title']) ?></title>
-<link rel="stylesheet" href="style.css">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sprints</title>
+<link rel="stylesheet" href="style.css?v=<?= time() ?>">
 </head>
 <body>
-
 <div class="sidebar">
-    <div class="brand">
-        <h2>ScrumBoard</h2>
-    </div>
-    <ul class="menu">
-        <li><a href="index.php">🏠 Dashboard</a></li>
-        <li><a href="projects.php">📁 Projets</a></li>
-        <li><a href="#" class="active">🏃 Sprints</a></li>
-        <li><a href="tasks.php">✅ Tâches</a></li>
-        <?php if($user['role']=='admin'): ?>
-        <li><a href="users.php">👤 Utilisateurs</a></li>
+    <div class="logo">Athena</div>
+
+    <nav>
+        <a href="index.php">Dashboard</a>
+        <a href="projects.php">Projets</a>
+        <a href="sprints.php">Sprints</a>
+        <a href="tasks.php">Tâches</a>
+
+        <?php if($_SESSION['user']['role']==='admin'): ?>
+            <a href="users.php">Utilisateurs</a>
         <?php endif; ?>
-        <li><a href="logout.php">🚪 Déconnexion</a></li>
-    </ul>
+
+        <a href="logout.php" class="logout">Déconnexion</a>
+    </nav>
 </div>
 
-<div class="main">
-    <h1>Sprints du projet : <?= htmlspecialchars($project['title']) ?></h1>
 
-    <!-- Formulaire création sprint -->
-    <h3>Créer un Sprint</h3>
-    <form method="POST">
-        <input type="text" name="title" placeholder="Titre sprint" required>
-        <input type="date" name="start_date" required>
-        <input type="date" name="end_date" required>
-        <button type="submit" name="create_sprint">Créer Sprint</button>
+<main class="content">
+<h1>Sprints du projet : <?= $current_project ? htmlspecialchars($current_project['title']) : 'Projet inconnu' ?></h1>
+    <h3>Changer de projet :</h3>
+    <form method="GET">
+        <select name="project_id" onchange="this.form.submit()">
+            <?php foreach($projects as $p): ?>
+                <option value="<?= $p['id'] ?>" <?= $p['id']==$project_id?'selected':'' ?>><?= htmlspecialchars($p['title']) ?></option>
+            <?php endforeach; ?>
+        </select>
     </form>
 
-    <!-- Liste des sprints -->
-    <h3>Liste des Sprints</h3>
+
+    <form method="POST">
+        <input type="hidden" name="sprint_id" value="<?= $edit_sprint['id'] ?? '' ?>">
+        <input type="text" name="name" placeholder="Nom du sprint" required value="<?= $edit_sprint['name'] ?? '' ?>">
+        <input type="date" name="start_date" required value="<?= $edit_sprint['start_date'] ?? '' ?>">
+        <input type="date" name="end_date" required value="<?= $edit_sprint['end_date'] ?? '' ?>">
+        <button name="<?= $edit_sprint ? 'update_sprint' : 'create_sprint' ?>">
+            <?= $edit_sprint ? 'Mettre à jour' : 'Créer Sprint' ?>
+        </button>
+        <?php if($edit_sprint): ?>
+            <a href="sprints.php?project_id=<?= $project_id ?>">Annuler</a>
+        <?php endif; ?>
+    </form>
+
     <table>
-        <thead>
-            <tr>
-                <th>Titre</th>
-                <th>Début</th>
-                <th>Fin</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach($sprints as $s): ?>
-            <tr>
-                <td><?= htmlspecialchars($s['title']) ?></td>
-                <td><?= htmlspecialchars($s['start_date']) ?></td>
-                <td><?= htmlspecialchars($s['end_date']) ?></td>
-                <td>
-                    <a href="tasks.php?sprint_id=<?= $s['id'] ?>">✅ Tâches</a>
-                    <a href="?delete=<?= $s['id'] ?>&project_id=<?= $project_id ?>" onclick="return confirm('Supprimer ce sprint ?')">🗑️</a>
-                </td>
-            </tr>
-            <?php endforeach; ?>
-            <?php if(empty($sprints)): ?>
-            <tr>
-                <td colspan="4" style="text-align:center;">Aucun sprint trouvé</td>
-            </tr>
-            <?php endif; ?>
-        </tbody>
+        <tr>
+            <th>Nom</th>
+            <th>Date début</th>
+            <th>Date fin</th>
+            <th>Actions</th>
+        </tr>
+        <?php foreach($sprints as $sprint): ?>
+        <tr>
+            <td><?= htmlspecialchars($sprint['name']) ?></td>
+            <td><?= htmlspecialchars($sprint['start_date']) ?></td>
+            <td><?= htmlspecialchars($sprint['end_date']) ?></td>
+            <td>
+                <a class="action" href="?edit_sprint=<?= $sprint['id'] ?>&project_id=<?= $project_id ?>">✏️</a>
+                <a class="action" href="?delete_sprint=<?= $sprint['id'] ?>&project_id=<?= $project_id ?>" onclick="return confirm('Supprimer ce sprint ?')">🗑️</a>
+            </td>
+        </tr>
+        <?php endforeach; ?>
     </table>
 
-    <p><a href="projects.php">⬅ Retour aux projets</a></p>
-</div>
+   
+</main>
 
 </body>
 </html>
